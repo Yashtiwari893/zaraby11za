@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { checkAndFireDueReminders } from '@/lib/features/reminderChecker'
 import { classifyIntent } from '@/lib/ai/intent'
 import { getOrCreateUser, handleOnboarding } from '@/lib/features/onboarding'
 import {
@@ -56,6 +57,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     console.log('📩 Webhook:', JSON.stringify(body, null, 2))
+
+    // FREE PLAN FIX: Har incoming message pe due reminders check karo
+    // Non-blocking — webhook response wait nahi karega iske liye
+    checkAndFireDueReminders().catch(e => console.error('[webhook] reminderChecker error:', e))
 
     const { phone, to, message, buttonId, mediaUrl, mediaType, mimeType, subType, messageId, name, event } = parseWebhookPayload(body)
 
