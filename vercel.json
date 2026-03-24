@@ -1,12 +1,5 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/reminders",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/cron/briefing",
-      "schedule": "30 3 * * *"
-    }
-  ]
+  "github": {
+    "silent": true
+  }
 }
