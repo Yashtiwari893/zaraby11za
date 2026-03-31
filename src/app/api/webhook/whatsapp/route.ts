@@ -26,7 +26,6 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// BUG FIX: Proper MIME type resolver - was hardcoded 'image/jpeg' before
 function resolveMimeType(rawMime?: string | null, subType?: string | null): string {
   if (rawMime) {
     const clean = rawMime.split(';')[0].trim().toLowerCase()
@@ -58,21 +57,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     console.log('📩 Webhook:', JSON.stringify(body, null, 2))
 
-    // FREE PLAN FIX: Har incoming message pe due reminders check karo
-    // Non-blocking — webhook response wait nahi karega iske liye
-    checkAndFireDueReminders().catch(e => console.error('[webhook] reminderChecker error:', e))
-
     const { phone, to, message, buttonId, mediaUrl, mediaType, mimeType, subType, messageId, name, event } = parseWebhookPayload(body)
 
     if (!phone || !messageId) return NextResponse.json({ ok: true })
+    if (event !== 'MoMessage') return NextResponse.json({ ok: true })
 
-    const { data: botCreds } = await supabaseAdmin
-      .from('phone_document_mapping')
-      .select('auth_token')
-      .eq('phone_number', to)
-      .limit(1)
-    const authToken = botCreds?.[0]?.auth_token || process.env.ELEVEN_ZA_API_KEY
-
+    // 1. Initial log/insert (Atomic check for same messageId)
     const { error: logErr } = await supabaseAdmin.from('whatsapp_messages').insert([{
       message_id: messageId,
       channel: 'whatsapp',
@@ -89,14 +79,40 @@ export async function POST(req: NextRequest) {
     }])
 
     if (logErr && (logErr as any).code === '23505') {
-      console.log('ℹ️ Duplicate message ignored')
+      console.log('ℹ️ Duplicate message ignored (DB Constraint)')
       return NextResponse.json({ ok: true })
     }
 
-    if (event !== 'MoMessage') return NextResponse.json({ ok: true })
+    // 2. Early Response Guard (For safety if constraint didn't catch race)
+    const { data: existing } = await supabaseAdmin
+      .from('whatsapp_messages')
+      .select('is_responded')
+      .eq('message_id', messageId)
+      .single()
+
+    if (existing?.is_responded) {
+      console.log('ℹ️ Skipping logic — already responded.')
+      return NextResponse.json({ ok: true })
+    }
+
+    // --- LOCK THE MESSAGE ---
+    // Mark as responded immediately so any retry hitting this in the next few seconds stops.
+    await supabaseAdmin.from('whatsapp_messages').update({ is_responded: true }).eq('message_id', messageId)
+
+    // 3. Main Business Logic
+    // FREE PLAN FIX: Check due reminders
+    checkAndFireDueReminders().catch(e => console.error('[webhook] reminderChecker error:', e))
+
+    const { data: botCreds } = await supabaseAdmin
+      .from('phone_document_mapping')
+      .select('auth_token')
+      .eq('phone_number', to)
+      .limit(1)
+    const authToken = botCreds?.[0]?.auth_token || process.env.ELEVEN_ZA_API_KEY
 
     const user = await getOrCreateUser(phone)
     if (!user) return NextResponse.json({ ok: true })
+
     if (name && !user.name) {
       await supabaseAdmin.from('users').update({ name }).eq('id', user.id)
     }
@@ -117,7 +133,6 @@ export async function POST(req: NextRequest) {
 
     const isImageOrDoc = mediaType === 'image' || mediaType === 'document' || subType === 'image' || subType === 'document'
     if (mediaUrl && isImageOrDoc && subType !== 'voice' && subType !== 'audio') {
-      // BUG FIX: Use resolveMimeType instead of hardcoded 'image/jpeg'
       const resolvedMime = resolveMimeType(mimeType, subType)
       await handleSaveDocument({
         userId: user.id, phone, language: lang,
@@ -145,6 +160,7 @@ export async function POST(req: NextRequest) {
       await supabaseAdmin.from('sessions')
         .update({ context: {} })
         .eq('user_id', user.id)
+
       await sendWhatsAppMessage({
         to: phone,
         message: lang === 'hi'
@@ -172,7 +188,6 @@ export async function POST(req: NextRequest) {
         await handleListReminders({ userId: user.id, phone, language: lang })
         break
 
-      // BUG FIX: Was calling handleListReminders() instead of handleCancelReminder()!
       case 'CANCEL_REMINDER':
         await handleCancelReminder({
           userId: user.id, phone, language: lang,
@@ -211,7 +226,6 @@ export async function POST(req: NextRequest) {
         })
         break
 
-      // BUG FIX: DELETE_TASK case was completely missing from switch!
       case 'DELETE_TASK':
         await handleDeleteTask({
           userId: user.id, phone, language: lang,
