@@ -15,6 +15,10 @@ ZARA is a smart WhatsApp-based personal assistant that helps users manage remind
    - `migrations/create_database.sql`
    - `migrations/007_sam_personal_assistant.sql`
    - `migrations/add_11za_credentials_to_files.sql`
+   a
+   sa
+   sa
+   sa
    - `migrations/add_intent_and_file_type.sql`
    - `migrations/add_credentials_to_phone_mapping.sql`
    - **`migrations/008_fix_all_bugs.sql`** ← IMPORTANT, run this last
